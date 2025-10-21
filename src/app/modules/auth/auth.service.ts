@@ -4,10 +4,12 @@ import config from "../../config";
 import UserModel from "../user/user.model";
 import httpStatus from "http-status";
 import { createToken, verifyToken } from "../../utils/auth.utils";
+import redis from "../../redis/redis.client";
 
-
-const loginUserIntoDB = async (payload: { email: string; password: string }) => {
-
+const loginUserIntoDB = async (payload: {
+  email: string;
+  password: string;
+}) => {
   const user = await UserModel.findOne({ email: payload.email });
 
   if (!user) {
@@ -38,24 +40,44 @@ const loginUserIntoDB = async (payload: { email: string; password: string }) => 
     config.jwt_refresh_expires_in as string
   );
 
+  // 4️⃣ Store refresh token in Redis
+  await redis.set(
+    `user:${user._id}:refreshToken`,
+    refreshToken,
+    "EX",
+    7 * 24 * 60 * 60 // 7 days in seconds
+  );
+  console.log(`[LoginService][Redis] Refresh token stored for user:${user._id}`);
+
   return {
     accessToken,
     refreshToken,
-    user
+    user,
   };
 };
 
-
-
-
-// ✅ Refresh token logic
-const refreshAccessToken = async (token: string) => {
+const refreshAccessToken = async (refreshToken: string) => {
   try {
-    const decoded = verifyToken(token, config.jwt_refresh_secret as string);
+    // 1️⃣ Verify refresh token
+    const decoded = verifyToken(refreshToken, config.jwt_refresh_secret as string);
+    const userId = decoded.userId;
 
-    const user = await UserModel.findById(decoded.userId);
+    // 2️⃣ Check if user exists
+    const user = await UserModel.findById(userId);
     if (!user) throw new AppError(httpStatus.UNAUTHORIZED, "User not found");
 
+    // 3️⃣ Verify refresh token in Redis
+    const storedToken = await redis.get(`user:${userId}:refreshToken`);
+    console.log("[RefreshService][Redis] Stored refresh token:", storedToken ? storedToken.slice(0, 10) + "..." : "none");
+
+    if (!storedToken || storedToken !== refreshToken) {
+      console.log("[RefreshService] Refresh token mismatch!");
+      throw new AppError(httpStatus.UNAUTHORIZED, "Invalid refresh token");
+    }
+    console.log("[RefreshService] Refresh token verified in Redis");
+
+
+    // 4️⃣ Generate new access token
     const jwtPayload = {
       email: user.email,
       userId: user._id,
@@ -73,7 +95,6 @@ const refreshAccessToken = async (token: string) => {
     throw new AppError(httpStatus.UNAUTHORIZED, "Invalid or expired refresh token");
   }
 };
-
 
 export const AuthService = {
   loginUserIntoDB,

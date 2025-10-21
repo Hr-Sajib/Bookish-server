@@ -48,6 +48,19 @@ const getAllUsers = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+// Get logged in users
+const getLoggedInUsers = catchAsync(async (req: Request, res: Response) => {
+  const user = await userServices.getLoggedInUsersFromRedis();
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: "Logged in users fetched successfully",
+    data: user,
+  });
+});
+
+
 // Get user by ID
 const getUserById = catchAsync(async (req: Request, res: Response) => {
   const { id } = req.params;
@@ -178,7 +191,7 @@ export const userController = {
   createUser,
   verifyUser,
   updateUser,
-  // updatePassword,
+  getLoggedInUsers,
   softDeleteUser,
   getAllUsers,
   getUserById,

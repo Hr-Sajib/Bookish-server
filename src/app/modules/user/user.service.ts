@@ -5,7 +5,8 @@ import UserModel from "./user.model";
 import AppError from "../../errors/appError";
 import config from "../../config";
 import { sendMail, sendResetPasswordEmailOTP } from "../../utils/emailing";
-import { email } from "zod";
+import redis from "../../redis/redis.client";
+
 
 // ----------------------------------------------------------------
 // CREATE USER
@@ -268,6 +269,29 @@ const resetPasswordWithTokenAndOTP = async (
   return updatedUser;
 };
 
+
+
+// ----------------------------------------------------------------
+// GET LOGGED-IN USERS FROM REDIS
+// ----------------------------------------------------------------
+const getLoggedInUsersFromRedis = async () => {
+  // 1️⃣ Fetch all keys related to user refresh tokens
+  const keys = await redis.keys("user:*:refreshToken");
+
+  if (!keys.length) return []; // no users logged in
+
+  // 2️⃣ Extract user IDs from keys
+  const userIds = keys.map((key) => key.split(":")[1]);
+
+  // 3️⃣ Fetch user data from MongoDB (only email and userName)
+  const users = await UserModel.find({ _id: { $in: userIds }, isDeleted: false })
+    .select("email userName");
+
+  // 4️⃣ Return as array of objects
+  return users;
+};
+
+
 // ----------------------------------------------------------------
 // EXPORT
 // ----------------------------------------------------------------
@@ -281,4 +305,5 @@ export const userServices = {
   softDeleteUserInDB,
   sendResetPasswordOTP,
   resetPasswordWithTokenAndOTP,
+  getLoggedInUsersFromRedis
 };

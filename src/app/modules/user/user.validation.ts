@@ -22,6 +22,9 @@ const createUserValidationSchema = z.object({
       .refine((value) => value.startsWith("+8801"), {
         message: "Phone number must start with +8801",
       }),
+    designation: z
+      .string()
+      .max(30, { message: "Designation must be at max 30 characters long" })
   }),
 });
 
@@ -48,6 +51,10 @@ const updateUserValidationSchema = z.object({
           message: "Phone number must start with +8801",
         })
         .optional(),
+        designation: z
+      .string()
+      .max(30, { message: "Designation must be at max 30 characters long" })
+      .optional()
     })
     .strict(), // prevent extra fields
 });

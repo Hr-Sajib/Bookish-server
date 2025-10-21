@@ -17,6 +17,7 @@ export interface IUser extends Document {
   role: UserRole;
 
   phone: string;
+  designation: string;
 
   otp: {
     otpCode: number | null,

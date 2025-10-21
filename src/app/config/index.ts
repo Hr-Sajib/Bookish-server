@@ -32,6 +32,10 @@ export default {
   email_user: process.env.EMAIL_USER,
   gmail_app_password: process.env.GMAIL_APP_PASSWORD,
   
+  redis_host: process.env.REDIS_HOST,
+  redis_port: process.env.REDIS_PORT,
+  redis_password: process.env.REDIS_PASSWORD,
+
   // smtp_host: process.env.SMTP_HOST,
   // smtp_port: process.env.SMTP_PORT,
   // email_user: process.env.HOSTINGER_USER,

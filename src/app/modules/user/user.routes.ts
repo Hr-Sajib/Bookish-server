@@ -21,6 +21,14 @@ router.get(
   userController.getAllUsers
 );
 
+// Get currently logged-in users (admin only)
+router.get(
+  "/logged-in-users",
+  auth(UserRole.ADMIN),          
+  userController.getLoggedInUsers
+);
+
+
 // Get current user (authenticated)
 router.get("/getMe", 
   auth(UserRole.USER, UserRole.ADMIN),
