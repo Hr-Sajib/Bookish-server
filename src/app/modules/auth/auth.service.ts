@@ -96,7 +96,26 @@ const refreshAccessToken = async (refreshToken: string) => {
   }
 };
 
+const logoutUser = async (userId: string) => {
+
+  console.log("user logged out : ", userId)
+  try {
+    // Delete refresh token from Redis
+    const deleted = await redis.del(`user:${userId}:refreshToken`);
+    console.log(`[LogoutService][Redis] Refresh token for user:${userId} ${deleted ? "deleted" : "not found"}`);
+
+    if (!deleted) {
+      console.log(`[LogoutService] No refresh token found for user:${userId}`);
+    }
+
+    return { message: "User logged out successfully" };
+  } catch (error) {
+    throw new AppError(httpStatus.INTERNAL_SERVER_ERROR, "Failed to log out user");
+  }
+};
+
 export const AuthService = {
   loginUserIntoDB,
   refreshAccessToken,
+  logoutUser,
 };

@@ -283,6 +283,8 @@ const getLoggedInUsersFromRedis = async () => {
   // 2️⃣ Extract user IDs from keys
   const userIds = keys.map((key) => key.split(":")[1]);
 
+  console.log("logged in users : ",userIds)
+
   // 3️⃣ Fetch user data from MongoDB (only email and userName)
   const users = await UserModel.find({ _id: { $in: userIds }, isDeleted: false })
     .select("email userName");

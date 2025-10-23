@@ -8,8 +8,9 @@ export interface IBook {
     longDescription: string,
     authorName: string,
     publishingYear: string,
+    coverUrl: string,
 
-    postCreatorId: Types.ObjectId;
+    postCreatorId: Types.ObjectId,
     postCreatorName: string;
     postCreatorDesignation: string;
 

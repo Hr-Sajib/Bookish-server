@@ -1,0 +1,400 @@
+
+import {
+  S3Client,
+  PutObjectCommand,
+  DeleteObjectCommand,
+} from "@aws-sdk/client-s3";
+import multer from "multer";
+import { Request } from "express";
+import { extname } from "path";
+import status from "http-status";
+
+import sharp from "sharp";
+import config from "../config";
+import AppError from "../errors/appError";
+
+// AWS S3 Client Configuration
+const s3Client = new S3Client({
+  region: config.aws.aws_region,
+  credentials: {
+    accessKeyId: config.aws.aws_access_key_id as string,
+    secretAccessKey: config.aws.aws_secret_access_key as string,
+  },
+});
+
+// Multer storage configuration (memory storage for S3 upload)
+const storage = multer.memoryStorage();
+
+// File filter to allow only images
+export const fileFilter = (
+  req: Request,
+  file: Express.Multer.File,
+  cb: multer.FileFilterCallback
+) => {
+  const allowedMimes = ["image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml"];
+
+  console.log("[Multer] Incoming file:", {
+    fieldname: file.fieldname,
+    originalName: file.originalname,
+    mimetype: file.mimetype,
+    size: file.size,
+  });
+
+  if (allowedMimes.includes(file.mimetype)) {
+    console.log("[Multer] File accepted:", file.originalname);
+    cb(null, true);
+  } else {
+    console.log("[Multer] File rejected:", file.originalname);
+    cb(
+      new AppError(
+        status.BAD_REQUEST,
+        "Invalid file type. Only JPEG, PNG, GIF, WEBP, and SVG are allowed."
+      )
+    );
+  }
+};
+
+// ✅ Proper Multer instance (not a middleware)
+export const upload = multer({
+  storage,
+  // fileFilter,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB
+  },
+});
+
+
+
+// Interface for upload result
+interface UploadResult {
+  url: string;
+  key: string;
+  originalName: string;
+  size: number;
+  mimetype: string;
+}
+
+// Function to optimize image based on type
+export const optimizeImage = async (
+  file: Express.Multer.File
+): Promise<{ buffer: Buffer; mimetype: string; extension: string }> => {
+  const originalExtension = extname(file.originalname).toLowerCase();
+
+  try {
+    const sharpInstance = sharp(file.buffer);
+
+    // 🧠 Get image metadata
+    const metadata = await sharpInstance.metadata();
+
+    // ⚙️ Skip optimization for small images (under 100 KB)
+    const SMALL_IMAGE_THRESHOLD = 100 * 1024; // 100 KB
+    if (file.size < SMALL_IMAGE_THRESHOLD) {
+      console.log(
+        `Skipping optimization for small image: ${file.originalname} (${file.size} bytes)`
+      );
+      return {
+        buffer: file.buffer,
+        mimetype: file.mimetype,
+        extension: originalExtension,
+      };
+    }
+
+    let optimizedBuffer: Buffer;
+    let outputMimetype: string;
+    let outputExtension: string;
+
+    // 🔧 Determine output format and optimization settings
+    switch (file.mimetype) {
+      case "image/jpeg":
+      case "image/jpg":
+        optimizedBuffer = await sharpInstance
+          .resize(1200, 800, {
+            fit: "inside",
+            withoutEnlargement: true,
+          })
+          .jpeg({
+            quality: 80,
+            mozjpeg: true,
+          })
+          .toBuffer();
+        outputMimetype = "image/jpeg";
+        outputExtension = ".jpg";
+        break;
+
+      case "image/png":
+        optimizedBuffer = await sharpInstance
+          .resize(1200, 800, {
+            fit: "inside",
+            withoutEnlargement: true,
+          })
+          .png({
+            quality: 80,
+            compressionLevel: 9,
+          })
+          .toBuffer();
+        outputMimetype = "image/png";
+        outputExtension = ".png";
+        break;
+
+      case "image/webp":
+        optimizedBuffer = await sharpInstance
+          .resize(1200, 800, {
+            fit: "inside",
+            withoutEnlargement: true,
+          })
+          .webp({ quality: 80 })
+          .toBuffer();
+        outputMimetype = "image/webp";
+        outputExtension = ".webp";
+        break;
+
+      case "image/gif":
+        // GIFs: resize but keep format
+        optimizedBuffer = await sharpInstance
+          .resize(800, 600, {
+            fit: "inside",
+            withoutEnlargement: true,
+          })
+          .gif()
+          .toBuffer();
+        outputMimetype = "image/gif";
+        outputExtension = ".gif";
+        break;
+
+      case "image/svg+xml":
+        // SVGs are vector — no need to optimize
+        optimizedBuffer = file.buffer;
+        outputMimetype = "image/svg+xml";
+        outputExtension = ".svg";
+        break;
+
+      default:
+        // Fallback: compress to JPEG
+        optimizedBuffer = await sharpInstance
+          .resize(1200, 800, {
+            fit: "inside",
+            withoutEnlargement: true,
+          })
+          .jpeg({ quality: 80 })
+          .toBuffer();
+        outputMimetype = "image/jpeg";
+        outputExtension = ".jpg";
+    }
+
+    console.log(
+      `✅ Image optimized: ${file.originalname} -> ${outputExtension} (Original: ${file.size} bytes, Optimized: ${optimizedBuffer.length} bytes)`
+    );
+
+    return {
+      buffer: optimizedBuffer,
+      mimetype: outputMimetype,
+      extension: outputExtension,
+    };
+  } catch (error) {
+    console.error(`❌ Error optimizing image ${file.originalname}:`, error);
+    // Fallback to original
+    return {
+      buffer: file.buffer,
+      mimetype: file.mimetype,
+      extension: originalExtension,
+    };
+  }
+};
+// Function to upload a single optimized file to S3
+export const uploadSingleFileToS3 = async (
+  file: Express.Multer.File,
+  folder: string = "service-images"
+): Promise<UploadResult> => {
+  try {
+    // Optimize the image
+    const optimizedImage = await optimizeImage(file);
+
+    const fileName = `${folder}/${Date.now()}-${Math.random()
+      .toString(36)
+      .substring(2, 15)}${optimizedImage.extension}`;
+
+    const params = {
+      Bucket: config.aws.aws_s3_bucket_name as string,
+      Key: fileName,
+      Body: optimizedImage.buffer,
+      ContentType: optimizedImage.mimetype,
+      // Add cache control for better performance
+      CacheControl: 'public, max-age=31536000',
+    };
+
+    await s3Client.send(new PutObjectCommand(params));
+
+    const url = `https://${config.aws.aws_s3_bucket_name}.s3.${config.aws.aws_region}.amazonaws.com/${fileName}`;
+
+    return {
+      url,
+      key: fileName,
+      originalName: file.originalname,
+      size: optimizedImage.buffer.length,
+      mimetype: optimizedImage.mimetype
+    };
+  } catch (error) {
+    throw new AppError(
+      status.INTERNAL_SERVER_ERROR,
+      `Failed to upload file to S3: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`
+    );
+  }
+};
+
+// Function to upload multiple optimized files to S3
+const uploadMultipleFilesToS3 = async (
+  files: Express.Multer.File[],
+  folder: string = "service-images"
+): Promise<UploadResult[]> => {
+  try {
+    // Limit concurrent uploads to avoid overwhelming the system
+    const MAX_CONCURRENT_UPLOADS = 3;
+
+    const results: UploadResult[] = [];
+
+    // Process files in batches to avoid memory issues
+    for (let i = 0; i < files.length; i += MAX_CONCURRENT_UPLOADS) {
+      const batch = files.slice(i, i + MAX_CONCURRENT_UPLOADS);
+      const batchPromises = batch.map((file) =>
+        uploadSingleFileToS3(file, folder)
+      );
+      const batchResults = await Promise.all(batchPromises);
+      results.push(...batchResults);
+    }
+
+    console.log(`Successfully uploaded ${results.length} files to S3`);
+    return results;
+  } catch (error) {
+    throw new AppError(
+      status.INTERNAL_SERVER_ERROR,
+      `Failed to upload files to S3: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`
+    );
+  }
+};
+
+// Function to delete a file from S3
+const deleteFileFromS3 = async (key: string): Promise<void> => {
+  try {
+    const params = {
+      Bucket: config.aws.aws_s3_bucket_name as string,
+      Key: key,
+    };
+
+    await s3Client.send(new DeleteObjectCommand(params));
+    console.log(`Successfully deleted file from S3: ${key}`);
+  } catch (error) {
+    throw new AppError(
+      status.INTERNAL_SERVER_ERROR,
+      `Failed to delete file from S3: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`
+    );
+  }
+};
+
+// Function to clean up uploaded files if service creation fails
+const cleanupUploadedFiles = async (uploadResults: UploadResult[]): Promise<void> => {
+  try {
+    if (uploadResults.length === 0) {
+      return;
+    }
+
+    console.log(`Cleaning up ${uploadResults.length} uploaded files...`);
+
+    const deletePromises = uploadResults.map((result) =>
+      deleteFileFromS3(result.key).catch(error => {
+        // Log individual deletion errors but don't stop the cleanup process
+        console.error(`Failed to delete file ${result.key}:`, error);
+        return null;
+      })
+    );
+
+    await Promise.all(deletePromises);
+    console.log(`Successfully cleaned up ${uploadResults.length} uploaded files`);
+  } catch (error) {
+    console.error('Error during cleanup of uploaded files:', error);
+    // Don't throw error during cleanup to avoid masking original error
+  }
+};
+
+// Function to extract S3 key from URL
+const extractKeyFromUrl = (url: string): string => {
+  try {
+    const bucketName = config.aws.aws_s3_bucket_name as string;
+    const region = config.aws.aws_region;
+
+    // Handle different URL formats
+    const patterns = [
+      new RegExp(`https://${bucketName}\\.s3\\.${region}\\.amazonaws\\.com/(.+)`),
+      new RegExp(`https://${bucketName}\\.s3-${region}\\.amazonaws\\.com/(.+)`),
+      new RegExp(`https://s3\\.${region}\\.amazonaws\\.com/${bucketName}/(.+)`)
+    ];
+
+    for (const pattern of patterns) {
+      const match = url.match(pattern);
+      if (match && match[1]) {
+        return match[1];
+      }
+    }
+
+    // Fallback: try to extract the key by splitting the URL
+    const parts = url.split('/');
+    return parts.slice(3).join('/'); // Remove protocol, domain, and bucket parts
+  } catch (error) {
+    console.error('Error extracting key from URL:', error);
+    throw new AppError(
+      status.BAD_REQUEST,
+      'Invalid S3 URL format'
+    );
+  }
+};
+
+// Function to validate file size before upload
+const validateFileSize = (file: Express.Multer.File): void => {
+  const maxSize = 10 * 1024 * 1024; // 10MB
+  if (file.size > maxSize) {
+    throw new AppError(
+      status.BAD_REQUEST,
+      `File ${file.originalname} exceeds maximum size of 10MB`
+    );
+  }
+};
+
+// Function to validate multiple files
+const validateFiles = (files: Express.Multer.File[]): void => {
+  if (!files || files.length === 0) {
+    throw new AppError(
+      status.BAD_REQUEST,
+      "No files provided for upload"
+    );
+  }
+
+  files.forEach(file => {
+    validateFileSize(file);
+  });
+
+  if (files.length > 10) {
+    throw new AppError(
+      status.BAD_REQUEST,
+      "Cannot upload more than 10 files at once"
+    );
+  }
+};
+
+export const FileUploadUtil = {
+  upload,
+  uploadSingleFileToS3,
+  uploadMultipleFilesToS3,
+  deleteFileFromS3,
+  cleanupUploadedFiles,
+  extractKeyFromUrl,
+  validateFileSize,
+  validateFiles,
+};
+
+
+

@@ -51,6 +51,8 @@ const auth = (...requiredRoles: UserRole[]) => {
       // Attach user to request
       req.user = decoded as JwtPayload & { role: string };
 
+      console.log("logged in user : ", decoded)
+
       next();
     } catch (error) {
       if (error instanceof TokenExpiredError) {

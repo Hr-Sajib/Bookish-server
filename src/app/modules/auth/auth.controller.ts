@@ -22,7 +22,7 @@ const loginUser = catchAsync(async (req, res) => {
     httpOnly: true,
     secure: config.NODE_ENV === "production",
     sameSite: "strict",
-    maxAge: 15 * 60 * 1000, // 15 minutes
+    maxAge: 1 * 24 * 60 * 60 * 1000, // 1 day
   });
 
 
@@ -62,7 +62,36 @@ const refreshAccessToken = catchAsync(async (req, res) => {
 
 
 
+const logout = catchAsync(async (req, res) => {
+  const userId = req.user?.userId;
+  if (!userId) {
+    throw new AppError(status.UNAUTHORIZED, "User not authenticated");
+  }
+
+  await AuthService.logoutUser(userId);
+
+  // Clear cookies
+  res.clearCookie("accessToken", {
+    httpOnly: true,
+    secure: config.NODE_ENV === "production",
+    sameSite: "strict",
+  });
+  res.clearCookie("refreshToken", {
+    httpOnly: true,
+    secure: config.NODE_ENV === "production",
+    sameSite: "strict",
+  });
+
+  sendResponse(res, {
+    statusCode: status.OK,
+    success: true,
+    message: "User logged out successfully!",
+    data: null,
+  });
+});
+
 export const AuthController = {
   loginUser,
-  refreshAccessToken
+  refreshAccessToken,
+  logout,
 };
